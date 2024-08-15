@@ -269,10 +269,16 @@ void Application::Listen(){
                 throw std::runtime_error("Polling error when checking connections");
         }
 
-        for(auto conn : connections){
-                conn->ReceiveData();
-                if(conn->ForClosure()){
-                        conn->Close();
+        //We iterate through all the connections, close those that need to be closed
+        //and remove them from the array
+        //If they are not to be closed, then we receive data from them
+        for(auto it = connections.begin(); it != connections.end(); ){
+                if((*it)->ForClosure()){
+                        (*it)->Close();
+                        it = vec.erase(it);
+                } else{
+                        (*it)->ReceiveData();
+                        ++it;
                 }
         }
 }

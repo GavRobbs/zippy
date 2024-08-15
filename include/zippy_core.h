@@ -40,6 +40,7 @@ class Connection
         std::string BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body);
         ~Connection();
         void Close();
+        bool ForClosure();
 
         private:
         int sockfd;
