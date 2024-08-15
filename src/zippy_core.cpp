@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <cstring>
 #include <unistd.h>
+#include <fcntl.h>
 #include <regex>
 #include <poll.h>
 
@@ -24,31 +25,31 @@ std::string Connection::PullData(){
         return std::string{dataBuffer};
 }
 
-Connection::Connection(const int & sock, std::function<void(const HTTPRequest &)> handler):sockfd(sock), receiver_function(handler){
+Connection::Connection(){
+
+        last_alive_time = std::time(0);
 
 }
 
 Connection::~Connection(){
-        if(sockfd != -1){
-                close(sockfd);
-        }
 }
 
 void Connection::Close(){
-        if(sockfd != -1){
-                close(sockfd);
-        }
-        sockfd = -1;
+        //std::cout << "Closing connection identified by " << sockfd << std::endl;
+        close(sockfd);
 }
 
-void Connection::AcceptConnection(const int &serverfd){
+bool Connection::AcceptConnection(const int &serverfd){
 
         socklen_t sin_size;
         sockaddr_storage their_address;
         sockfd = accept(serverfd, (sockaddr*)&their_address, &sin_size);
 
+        int flags = fcntl(sockfd, F_GETFL, 0);
+        fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
         if(sockfd < 0){
-                throw std::runtime_error("Connection not accepted properly");
+                return false;
         } else{
 
                 if(their_address.ss_family == AF_INET){
@@ -65,13 +66,46 @@ void Connection::AcceptConnection(const int &serverfd){
                 }
         }
 
+        std::cout << "Connection accepted from " << ip_address << std::endl;
+        return true;
+
 }
 
-void Connection::ReceiveData(){
-        std::string request_data = PullData();
-        HTTPRequest req = ParseHTTPRequest(request_data);
-        receiver_function(req);
+std::shared_ptr<HTTPRequest> Connection::ReceiveData(){
+        if(HasDataToRead()){
+                std::string request_data = PullData();
+
+                if(request_data.empty()){
+                        return nullptr;
+                }
+
+                HTTPRequest req = ParseHTTPRequest(request_data);
+                UpdateLastAliveTime();
+                return std::make_shared<HTTPRequest>(req);
+        }
+
+        return nullptr;
 }
+
+bool Connection::HasDataToRead()
+{
+        pollfd fds[1];
+        fds[0].fd = sockfd;
+        fds[0].events = POLLIN;
+
+        int result = poll(fds, 1, 0);
+        if(result > 0){
+                if(fds[0].revents & POLLIN){
+                        return true;
+                } else{
+                        return false;
+                }
+        } else{
+                return false;
+        }
+
+}
+
 
 HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
 
@@ -148,13 +182,34 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
                 }
                 
                 key = it->substr(0, first_colon);
+                std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c){
+                        return std::tolower(c);
+                });
 
-                value = it->substr(first_colon + 1, it->length());
+                //+2 to trim the first space in front of the character
+                value = it->substr(first_colon + 2, it->length());
+                std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c){
+                        return std::tolower(c);
+                });
 
-                if(key == "User-Agent"){
+                //std::cout << key << ": " << value << std::endl;
+
+                if(key == "user-agent"){
                         header.user_agent_info = value;
-                } else if(key == "Host"){
+                } else if(key == "host"){
                         header.host = value;
+                } else if(key == "connection"){
+
+                        if(value == "keep-alive"){
+                                header.keepAlive = true;
+                                keepAlive = true;
+                                forceClose = false;
+                                //std::cout << "Keep alive is on" << std::endl;
+                        } else{
+                                header.keepAlive = false;
+                                keepAlive = false;
+                                forceClose = true;
+                        }
                 }
 
         }
@@ -164,17 +219,52 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
         int bodyStart = request_raw.find("\r\n\r\n");
         bodyStart += 4;
         request.body = request_raw.substr(bodyStart, request_raw.length());
+        current_headers = header;
         return request;
 }
 
 void Connection::SendData(std::string data){
 
+        /* If the header is sent with Connection: close, then we close it after a request/response cycle. SendData would
+        correspond to the response cycle. */
+        if(!current_headers.keepAlive){
+                forceClose = true;
+        } else{
+                UpdateLastAliveTime();
+        }
+
         if(send(sockfd, data.c_str(), data.length(), 0) == -1)
         {
+                //std::cout << "Errno is: " << errno << " for " << sockfd << std::endl;
                 throw std::runtime_error("Error sending data");
         }
 
 }
+
+void Connection::UpdateLastAliveTime()
+{
+        if(!current_headers.keepAlive || forceClose){
+                return;
+        }
+
+        last_alive_time = std::time(0);
+}
+
+bool Connection::ForClosure(){
+
+        if(forceClose){
+                //std::cout << sockfd << " is force closed." << std::endl;
+                return true;
+        }
+
+        time_t diff = std::time(0) - last_alive_time;
+        return diff > 3;
+}
+
+int Connection::GetSocketFileDescriptor(){
+        return sockfd;
+}
+
 
 std::string ZippyUtils::BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body){
         std::stringstream ss;
@@ -205,6 +295,10 @@ void Application::Bind(int port){
                 throw std::runtime_error("Setting socket options failed");
         }
 
+        //This makes our server non-blocking
+        int flags = fcntl(server_socket_fd, F_GETFL, 0);
+        fcntl(server_socket_fd, F_SETFL, flags | O_NONBLOCK);
+
         if(bind(server_socket_fd, (sockaddr*)&address, sizeof(address)) < 0){
                 close(server_socket_fd);
                 throw std::runtime_error("Failed to bind socket to port " + port);
@@ -229,41 +323,23 @@ void Application::Listen(){
 
         int timeout = 2500;
 
-
-        int result = poll(fds, 1, timeout);
+        int result = poll(fds, 1, 0);
         if(result > 0){
                 if(fds[0].revents & POLLIN){
 
                         while(true){
 
-                                std::shared_ptr<Connection> connection = std::make_shared(server_socket_fd, [this, &connection](const HTTPRequest & request){
+                                std::shared_ptr<Connection> connection = std::make_shared<Connection>();
 
-                                        RouteFunction func;
-
-                                        if(this->router.FindRoute(request.header.path, func)){
-                                                connection.SendData(func(request));
-                                        } else{
-                                                std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
-                                                connection.SendData(data);
-                                        }
-                                });
-
-                                try{
-                                        connection->AcceptConnection(server_socket_fd);
-                                        connections->push_back(connection);
-                                } catch(const std::runtime_error & e){
-                                        if(errno == EWOULDBLOCK || errno == EAGAIN){
-                                                break;
-                                        } else{
-                                                throw std::runtime_error("There was an unspecified error with a connection");
-                                        }
-                                }
+                                if(connection->AcceptConnection(server_socket_fd)){
+                                        connections.push_back(connection);
+                                } else{
+                                        break;
+                                }                                
 
                         }                        
                 }
         } else if(result == 0){
-
-                //There are no pending connections
 
         } else{
                 throw std::runtime_error("Polling error when checking connections");
@@ -273,11 +349,16 @@ void Application::Listen(){
         //and remove them from the array
         //If they are not to be closed, then we receive data from them
         for(auto it = connections.begin(); it != connections.end(); ){
+                auto r = (*it)->ReceiveData();
+
+                if(r != nullptr){
+                        ProcessRequest(r, *it);
+                }
+
                 if((*it)->ForClosure()){
                         (*it)->Close();
-                        it = vec.erase(it);
+                        it = connections.erase(it);
                 } else{
-                        (*it)->ReceiveData();
                         ++it;
                 }
         }
@@ -294,4 +375,20 @@ Application::Application():router(Router{}){
 
 Application::~Application(){
         close(server_socket_fd);
+}
+
+void Application::ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shared_ptr<Connection> connection){
+
+        RouteFunction func;
+
+        if(request == nullptr){
+                return;
+        }
+
+        if(router.FindRoute(request->header.path, func)){
+                connection->SendData(func(*request));
+        } else{
+                std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
+                connection->SendData(data);
+        }
 }

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <vector>
 #include <memory>
+#include <ctime>
 #include "zippy_routing.h"
 
 struct HTTPRequestHeader{
@@ -15,6 +16,7 @@ struct HTTPRequestHeader{
         std::string path;
         std::string user_agent_info;
         std::string host;
+        bool keepAlive;
 };
 
 struct HTTPRequest{
@@ -34,20 +36,27 @@ class Connection
 {
         public:
         void SendData(std::string data);
-        void ReceiveData();
-        void AcceptConnection(const int &serverfd);
-        Connection(const int & sock, std::function<void(const HTTPRequest &)> handler);
+        std::shared_ptr<HTTPRequest> ReceiveData();
+        bool AcceptConnection(const int &serverfd);
+        Connection();
         std::string BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body);
         ~Connection();
         void Close();
+        void UpdateLastAliveTime();
+        int GetSocketFileDescriptor();
         bool ForClosure();
 
         private:
         int sockfd;
         std::string ip_address;
-        std::function<void(const HTTPRequest &)> receiver_function;
         HTTPRequest ParseHTTPRequest(const std::string &request_raw);
         std::string PullData();
+        bool HasDataToRead();
+
+        bool forceClose{false};
+        bool keepAlive{false};
+        std::time_t last_alive_time;
+        HTTPRequestHeader current_headers;
 };
 
 class Application{
@@ -65,6 +74,8 @@ class Application{
         int server_socket_fd;
         Router router;
         std::vector<std::shared_ptr<Connection>> connections;
+        void ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shared_ptr<Connection> connection);
+
 
 };
 
