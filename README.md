@@ -2,7 +2,7 @@
 
 ## What is This?
 
-A C++ web application framework with an embedded server. It is single-threaded (for now), non-blocking and supports HTTP 1.1. There is no support for HTTPS yet, but I intend to add it soon.
+A C++ web application framework with an embedded server. It is single-threaded (for now), non-blocking and supports HTTP 1.1. There is no support for HTTPS yet, but I intend to add it soon. It's not super optimized, because its more for learning purposes, but feel free to fork it and go crazy. The API looks a bit like a mix between Django and Node.js, but in C++.
 
 ## Why?
 
@@ -18,5 +18,13 @@ When it's done.
 
 ### Changelog
 
-16/8/24: Made the server non-blocking, with proper Content-Length serving.
-16/8/24: Fixed the handling of query parameters and added support for the Content-Length header
+- 16/8/24: Made the server non-blocking, with proper Content-Length serving.
+- 16/8/24: Fixed the handling of query parameters and added support for the Content-Length header
+
+### Current Priorities
+
+- Fix my trie implementation for the router
+- Add a file storage backend option
+- Add a templating engine
+- Integrate JSON and XML libraries
+- Add templated HTML, JSON, XML and file responses
