@@ -1,4 +1,3 @@
-#include "zippy_core.h"
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -10,19 +9,112 @@
 #include <fcntl.h>
 #include <regex>
 #include <poll.h>
+#include "zippy_core.h"
+#include "zippy_utils.h"
 
-std::string Connection::PullData(){
+void Connection::PullData(){
 
-        int numBytes;
-        char dataBuffer[4096];
+        if(read_remainder == -1){
 
-        numBytes = recv(sockfd, dataBuffer, 4095, 0);
-        if(numBytes == -1){
-                throw std::runtime_error("Error receiving data");
+                std::size_t numBytes;
+                char dataBuffer[8192];
+
+                numBytes = recv(sockfd, dataBuffer, 8191, 0);
+                if(numBytes == -1){
+                        if(errno == EAGAIN || errno == EWOULDBLOCK){
+                                return;
+                        } else{
+                                throw std::runtime_error("Error receiving data, errno is " + errno);
+                        }
+                } else if(numBytes == 0){
+                        return;
+                }
+                dataBuffer[numBytes] = '\0';
+
+                std::string raw_with_header{dataBuffer};
+
+                //Search for content-length headers to get a hint
+                int cl_index = raw_with_header.find("Content-Length:");
+                
+                if(cl_index == std::string::npos){
+                        cl_index = raw_with_header.find("content-length:");
+                }
+
+                if(cl_index == std::string::npos){
+                        //If content length isn't specified, assume it all fits into 8kb
+                        read_remainder = 0;
+                        raw_body = raw_with_header;
+                        return;
+                }
+
+
+                //Extract the number for content length
+                std::string content_length_number = "";
+                std::size_t content_length = 0;
+
+                for(auto it = raw_with_header.begin() + cl_index + 15; it != raw_with_header.end(); ++it){
+
+                        if(*it =='\r' && *(it + 1) == '\n'){
+                                //We've hit the end of the line
+                                break;
+                        }
+
+                        content_length_number += *it;
+                }
+
+                content_length = std::stoul(content_length_number);
+
+                //Calculate the header size, the data size and see how much data has been read
+                std::size_t header_size = raw_with_header.find("\r\n\r\n") + 4;
+                std::size_t data_size = raw_with_header.length() - header_size;
+                std::size_t data_read = numBytes - header_size;
+
+                raw_body = raw_with_header;
+
+                if(data_read >= content_length){
+                        /* If we've read all the data, we can say there's nothing left */
+                        read_remainder = 0;
+                } else{
+                        /* Otherwise we calculate how much data is left, leaving it for another iteration and return*/
+                        read_remainder = content_length - data_read;                        
+                        return;
+                }
+
+        } else if(read_remainder > 0){
+
+                /* If we didn't get all the data last time, we go here.*/
+                
+                std::size_t numBytes;
+                char dataBuffer[8192];
+
+                numBytes = recv(sockfd, dataBuffer, 8191, 0);
+                if(numBytes == -1){
+                        if(errno == EAGAIN || errno == EWOULDBLOCK){
+                                return;
+                        } else{
+                                throw std::runtime_error("Error receiving data, errno is " + errno);
+                        }
+                }
+                dataBuffer[numBytes] = '\0';
+
+                //If there's still more data, we find out how much is left
+                //otherwise, we indicate that we've read everything
+                //and nothing is left
+                if(read_remainder > numBytes){
+                        read_remainder -= numBytes;
+                } else{
+                        read_remainder = 0;
+                }
+
+                //Append the newly read data to the body
+                raw_body += std::string{dataBuffer};
+                return;
+        } else{
+                //If read remainder is 0 then do nothing
         }
 
-        dataBuffer[numBytes] = '\0';
-        return std::string{dataBuffer};
+        
+
 }
 
 Connection::Connection(){
@@ -72,16 +164,37 @@ bool Connection::AcceptConnection(const int &serverfd){
 }
 
 std::shared_ptr<HTTPRequest> Connection::ReceiveData(){
-        if(HasDataToRead()){
-                std::string request_data = PullData();
 
-                if(request_data.empty()){
-                        return nullptr;
+        if(read_remainder == -1){
+
+                //The connection is awaiting data
+                //if it has data to read pull it
+                if(HasDataToRead()){
+                        PullData();
                 }
 
-                HTTPRequest req = ParseHTTPRequest(request_data);
+        } else if(read_remainder == 0){
+
                 UpdateLastAliveTime();
-                return std::make_shared<HTTPRequest>(req);
+
+                //Indicate that we're done reading this current request
+                //and we're ready to take another one
+                read_remainder = -1;
+
+                //Get the http request data
+                try{
+                        HTTPRequest req = ParseHTTPRequest(raw_body);
+                        return std::make_shared<HTTPRequest>(req);
+                } catch(const std::runtime_error & e){
+                        std::cout << "Empty request avoided" << std::endl;
+                        return nullptr;
+                }
+        } else{
+                
+                UpdateLastAliveTime();
+                //Finish reading the incomplete data
+                PullData();
+
         }
 
         return nullptr;
@@ -106,31 +219,43 @@ bool Connection::HasDataToRead()
 
 }
 
-
 HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
 
-        std::istringstream stream{request_raw};
-        std::vector<std::string> lines{};
-        std::string line;
+        if(request_raw == ""){
+                throw std::runtime_error("Empty request passed for parsing");
+        }
+
+        std::vector<std::string> header_lines{};
+        std::string header_line;
         HTTPRequest request;
         HTTPRequestHeader header;
 
-        while(std::getline(stream, line, '\n')){
+        std::string header_raw, body_raw;
+
+        std::size_t separating_line_index = request_raw.find("\r\n\r\n");
+        header_raw = request_raw.substr(0, separating_line_index + 2); //We want to get the last \r\n\r\n in the header
+        body_raw = request_raw.substr(separating_line_index + 4, request_raw.length());
+
+        //We read the header as a bunch of lines for later processing
+        std::istringstream stream{header_raw};
+
+        while(std::getline(stream, header_line, '\n')){
                 //We removed \n, but we have to remove the \r part of \r\n
 
-                if(line.length() > 1){
-                        lines.push_back(line.substr(0, line.length() - 1));
+                if(header_line.length() > 1){
+                        header_lines.push_back(header_line.substr(0, header_line.length() - 1));
                 } else{
                         //This line probably only contains the /r
-                        lines.push_back("");
+                        header_lines.push_back("");
                         break;
                 }
         }
 
+        //Get the URL from the request
         try{
                 std::regex re("([A-Z]+)\\s+(\\S+)\\s+HTTP/(\\S+)");
                 std::smatch match;
-                if(std::regex_match(lines[0], match, re)){
+                if(std::regex_match(header_lines[0], match, re)){
                         header.method = match.str(1);
                         header.path = match.str(2);
                         header.version = match.str(3);
@@ -141,6 +266,7 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
                 throw e;
         }
 
+        //Get the query parameters from the URL
         int q_pindex = header.path.find("?");
         std::string qparams = header.path.substr(q_pindex + 1);
         header.path = header.path.substr(0, q_pindex);
@@ -152,21 +278,42 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
         stream.clear();
         stream.str(qparams);
 
+        //Support encoding of query parameters as either & or ;
+        char delimiter = ' ';
+        if(qparams.find('&') != std::string::npos){
+                delimiter = '&';
+        } else{
+                delimiter = ';';
+        }
+
         std::regex re2("([^=]+)=(.*)");
         std::smatch m2;
 
-        while(std::getline(stream, line, '&')){
+        //TODO: Work on URL encoding
 
-                if(std::regex_match(line, m2, re2)){
-                        request.query_params[m2.str(1)] = m2.str(2);
+        while(std::getline(stream, header_line, delimiter)){
+
+                if(std::regex_match(header_line, m2, re2)){
+
+                        if(request.GET.find(m2.str(1)) == request.GET.end()){
+                                //If the entry doesn't already exist, then add it
+                                request.GET[m2.str(1)] = Parameter{ZippyUtils::URLDecode(m2.str(2))};
+                        } else{
+                                //If it exists, it means we passed the same query parameter multiple times
+                                //so we're looking at an array
+                                //Its up to users to handle this and make sure its formatted properly
+                                request.GET[m2.str(1)].Add(ZippyUtils::URLDecode(m2.str(2)));
+                        }
                 }
         }
+
+        //Parse the lines from the header for each option
 
         int first_colon;
         std::string key;
         std::string value;
 
-        for(auto it = lines.begin() + 1; it != lines.end(); it++){
+        for(auto it = header_lines.begin() + 1; it != header_lines.end(); it++){
 
                 //We would have already passed the first line with the verb and path
 
@@ -201,49 +348,76 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
                 } else if(key == "connection"){
 
                         if(value == "keep-alive"){
-                                header.keepAlive = true;
-                                keepAlive = true;
-                                forceClose = false;
+                                header.keep_alive = true;
                                 //std::cout << "Keep alive is on" << std::endl;
                         } else{
-                                header.keepAlive = false;
-                                keepAlive = false;
-                                forceClose = true;
+                                header.keep_alive = false;
                         }
+                } else if(key == "content-length"){
+                        header.content_length = std::stoul(value);
                 }
 
         }
 
         request.header = header;
-
-        int bodyStart = request_raw.find("\r\n\r\n");
-        bodyStart += 4;
-        request.body = request_raw.substr(bodyStart, request_raw.length());
+        request.body = body_raw;
         current_headers = header;
         return request;
 }
 
-void Connection::SendData(std::string data){
+void Connection::SendBufferedData(){
 
-        /* If the header is sent with Connection: close, then we close it after a request/response cycle. SendData would
-        correspond to the response cycle. */
-        if(!current_headers.keepAlive){
-                forceClose = true;
-        } else{
-                UpdateLastAliveTime();
+        //If the buffers are empty, return
+
+        UpdateLastAliveTime();
+
+        if(send_buffer.empty()){
+
+                hasToWrite = false;
+                return;
         }
 
-        if(send(sockfd, data.c_str(), data.length(), 0) == -1)
-        {
-                //std::cout << "Errno is: " << errno << " for " << sockfd << std::endl;
+        size_t bytes_sent{0};
+
+        auto it = send_buffer.begin();
+
+        //Send bytes via the socket
+        bytes_sent = send(sockfd, it->c_str(), it->length(), 0);
+
+        //Check if there was an error sending the data
+        if(bytes_sent == -1){
                 throw std::runtime_error("Error sending data");
         }
+
+        std::cout << "Sent " << bytes_sent << " bytes " << std::endl;
+
+        //if the number of bytes sent was less than the length of the entry
+        //chop up the string so we have the remainder to send next time
+        //Otherwise, erase it
+        if(bytes_sent < it->length()){
+                *it = it->substr(bytes_sent, it->length());
+        } else{
+                send_buffer.erase(it);
+        }
+
+        if(send_buffer.empty()){
+                hasToWrite = false;
+                toClose = true;
+        } else{
+                hasToWrite = true;
+        }
+}
+
+void Connection::SendData(std::string data){
+
+        UpdateLastAliveTime();
+        send_buffer.push_back(data);
 
 }
 
 void Connection::UpdateLastAliveTime()
 {
-        if(!current_headers.keepAlive || forceClose){
+        if(!current_headers.keep_alive){
                 return;
         }
 
@@ -252,28 +426,16 @@ void Connection::UpdateLastAliveTime()
 
 bool Connection::ForClosure(){
 
-        if(forceClose){
-                //std::cout << sockfd << " is force closed." << std::endl;
-                return true;
-        }
+        if(!current_headers.keep_alive){
+                return toClose;
+        }        
 
         time_t diff = std::time(0) - last_alive_time;
-        return diff > 3;
+        return diff > 5;
 }
 
 int Connection::GetSocketFileDescriptor(){
         return sockfd;
-}
-
-
-std::string ZippyUtils::BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body){
-        std::stringstream ss;
-        ss << "HTTP/1.1 " << status << " " << text_info << "\r\n";
-        for(auto it = headers.begin(); it != headers.end(); it++){
-                ss << it->first << " : " << it->second << "\r\n";
-        }
-        ss << "\r\n" << body;
-        return ss.str();
 }
 
 void Application::Bind(int port){
@@ -354,6 +516,8 @@ void Application::Listen(){
                 if(r != nullptr){
                         ProcessRequest(r, *it);
                 }
+
+                (*it)->SendBufferedData();
 
                 if((*it)->ForClosure()){
                         (*it)->Close();

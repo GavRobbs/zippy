@@ -15,3 +15,8 @@ Built using C++ 17 on an old Raspberry Pi 3B+ with dead GPIO pins.
 ## When?
 
 When it's done.
+
+### Changelog
+
+16/8/24: Made the server non-blocking, with proper Content-Length serving.
+16/8/24: Fixed the handling of query parameters and added support for the Content-Length header

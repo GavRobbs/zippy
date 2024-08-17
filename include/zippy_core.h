@@ -7,35 +7,15 @@
 #include <vector>
 #include <memory>
 #include <ctime>
+#include "zippy_utils.h"
 #include "zippy_routing.h"
-
-struct HTTPRequestHeader{
-
-        std::string method;
-        std::string version;
-        std::string path;
-        std::string user_agent_info;
-        std::string host;
-        bool keepAlive;
-};
-
-struct HTTPRequest{
-        HTTPRequestHeader header;
-        std::map<std::string, std::string> query_params;
-        std::string body;
-        std::string ip_address;
-};
-
-class ZippyUtils{
-
-    public:
-    static std::string BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body);
-};
+#include "zippy_request.h"
 
 class Connection
 {
         public:
         void SendData(std::string data);
+        void SendBufferedData();
         std::shared_ptr<HTTPRequest> ReceiveData();
         bool AcceptConnection(const int &serverfd);
         Connection();
@@ -45,18 +25,23 @@ class Connection
         void UpdateLastAliveTime();
         int GetSocketFileDescriptor();
         bool ForClosure();
-
+        
         private:
         int sockfd;
         std::string ip_address;
-        HTTPRequest ParseHTTPRequest(const std::string &request_raw);
-        std::string PullData();
+        HTTPRequest ParseHTTPRequest(const std::string & request_raw);
+        void PullData();
         bool HasDataToRead();
 
-        bool forceClose{false};
-        bool keepAlive{false};
         std::time_t last_alive_time;
         HTTPRequestHeader current_headers;
+
+        std::string raw_body;
+        std::size_t read_remainder{(std::size_t)-1};
+        bool hasToWrite{false};
+        bool toClose{false};
+
+        std::vector<std::string> send_buffer;
 };
 
 class Application{

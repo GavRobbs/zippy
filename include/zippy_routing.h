@@ -4,10 +4,10 @@
 #include <string>
 #include <algorithm>
 #include <vector>
+#include <functional>
+#include "zippy_request.h"
 
-struct HTTPRequest;
-
-typedef std::function<std::string(const HTTPRequest &)> RouteFunction;
+typedef std::function<std::string(HTTPRequest &)> RouteFunction;
 
 enum PTNodeType { WORD, VARIABLE };
 
