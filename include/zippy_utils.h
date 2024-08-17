@@ -28,6 +28,7 @@ struct Parameter{
         explicit operator double() const;
         explicit operator std::string() const;
         explicit operator std::vector<std::string>() const;
+        bool operator==(const Parameter & other) const;
         Parameter();
         Parameter(const std::string &val_in);
         ~Parameter();

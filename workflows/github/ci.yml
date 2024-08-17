@@ -1,0 +1,40 @@
+---
+name: Build and Test
+
+on: push
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Get dependencies
+        run: sudo apt-get install -y g++ cmake
+
+      - name: Create build directory
+        run: mkdir build
+
+      - name: Configure cmake for debug
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DZIPPY_BUILD_TESTS=ON -DZIPPY_BUILD_DEMO=ON
+
+      - name: Build with cmake for debug
+        run: cmake --build build --config Debug
+
+      - name: Run tests with ctest for debug
+        run: ctest --test-dir build --output-on-failure -C Debug
+
+      - name: Configure cmake for release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DZIPPY_BUILD_TESTS=ON -DZIPPY_BUILD_DEMO=ON
+
+      - name: Build with cmake for release
+        run: cmake --build build --config Release
+
+      - name: Run tests with ctest for release
+        run: ctest --test-dir build --output-on-failure -C Release

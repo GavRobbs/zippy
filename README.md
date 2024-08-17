@@ -20,10 +20,13 @@ When it's done.
 
 - 16/8/24: Made the server non-blocking, with proper Content-Length serving.
 - 16/8/24: Fixed the handling of query parameters and added support for the Content-Length header
+- 17/8/24: Separated the zippy library from the demo
+- 17/8/24: Fixed the trie implementation and added unit tests for it
+- 17/8/24: Cleaned up the root CMakeLists file a bit and added two options
+- 17/8/24: Set up CI with Github Actions
 
 ### Current Priorities
 
-- Fix my trie implementation for the router
 - Add a file storage backend option
 - Add a templating engine
 - Integrate JSON and XML libraries

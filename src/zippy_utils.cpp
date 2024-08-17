@@ -57,6 +57,12 @@ Parameter::~Parameter(){
 
 }
 
+bool Parameter::operator==(const Parameter & other) const{
+
+    return other.raw == this->raw && other.isMultiple == this->isMultiple;
+}
+
+
 std::string ZippyUtils::BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body){
         std::stringstream ss;
         ss << "HTTP/1.1 " << status << " " << text_info << "\r\n";

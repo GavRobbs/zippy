@@ -271,10 +271,6 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
         std::string qparams = header.path.substr(q_pindex + 1);
         header.path = header.path.substr(0, q_pindex);
 
-        if(!header.path.length() > 1 && header.path.back() == '/'){
-                header.path.erase(header.path.size() - 1);
-        }
-
         stream.clear();
         stream.str(qparams);
 
@@ -440,7 +436,6 @@ int Connection::GetSocketFileDescriptor(){
 
 void Application::Bind(int port){
 
-        char ipstr[INET6_ADDRSTRLEN];
         int yes = 1;
 
         sockaddr_in address;
@@ -482,8 +477,6 @@ void Application::Listen(){
         pollfd fds[1];
         fds[0].fd = server_socket_fd;
         fds[0].events = POLLIN;
-
-        int timeout = 2500;
 
         int result = poll(fds, 1, 0);
         if(result > 0){
@@ -549,7 +542,9 @@ void Application::ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shar
                 return;
         }
 
-        if(router.FindRoute(request->header.path, func)){
+        std::cout << "Request path is: " << request->header.path << std::endl;
+
+        if(router.FindRoute(request->header.path, func, request->URL_PARAMS)){
                 connection->SendData(func(*request));
         } else{
                 std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
