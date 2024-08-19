@@ -12,6 +12,7 @@
 #include "zippy_routing.h"
 #include "zippy_request.h"
 #include "interfaces/buffer_reader.h"
+#include "logging/ilogger.h"
 
 class Application;
 
@@ -59,6 +60,7 @@ class Application{
 
         void AddHeaderParser(std::shared_ptr<HTTPHeaderParser> parser);
         std::weak_ptr<HTTPHeaderParser> GetHeaderParsers(const std::string & header_name);
+        void SetLogger(std::unique_ptr<ILogger> logger);
 
         private:
         int server_socket_fd;
@@ -67,6 +69,7 @@ class Application{
         std::map<std::string, std::shared_ptr<HTTPHeaderParser>> header_parsers;
         void ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shared_ptr<Connection> connection);
         std::optional<int> AcceptConnection();
+        std::unique_ptr<ILogger> logger;
 
 
 };

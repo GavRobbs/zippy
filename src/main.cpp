@@ -1,6 +1,8 @@
 #include <iostream>
 #include <sstream>
+#include <memory>
 #include "zippy_core.h"
+#include "extensions/extension_factory.h"
 
 std::string webpage_header = "HTTP/1.1 200 OK\r\n\r\n";
 std::string webpage_body = R"(
@@ -59,6 +61,13 @@ std::string json_response = R"({
 int main(int argc, char **argv){
 
         Application app{};
+
+        ZippyExtensionFactory extension_factory{};
+        extension_factory.LoadExtensionsFromFolder("./extensions/");
+        ILogger * logger = extension_factory.CreateLogger("ConsoleLogger");
+
+        app.SetLogger(std::unique_ptr<ILogger>(logger));
+
         app.Bind(3500);
 
         app.GetRouter().AddRoute("/", [](const HTTPRequest & request) -> std::string {

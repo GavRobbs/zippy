@@ -211,8 +211,6 @@ void Connection::SendBufferedData(){
                 throw std::runtime_error("Error sending data");
         }
 
-        std::cout << "Sent " << bytes_sent << " bytes " << std::endl;
-
         //if the number of bytes sent was less than the length of the entry
         //chop up the string so we have the remainder to send next time
         //Otherwise, erase it
@@ -297,7 +295,7 @@ void Application::Bind(int port){
                 close(server_socket_fd);
                 throw std::runtime_error("Failed to start listening on port " + port);
         } else{ 
-                std::cout << "Zippy application bound to port " << port << std::endl;
+                logger->Log("Zippy application bound to port " + port);
         }
 
 }
@@ -363,6 +361,8 @@ Router & Application::GetRouter()
 
 Application::Application():router(Router{}){
 
+        SetLogger(std::make_unique<NullLogger>());
+
 }
 
 Application::~Application(){
@@ -377,7 +377,7 @@ void Application::ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shar
                 return;
         }
 
-        std::cout << "Request path is: " << request->header.path << std::endl;
+        logger->Log("Request path is: " + request->header.path);
 
         if(router.FindRoute(request->header.path, func, request->URL_PARAMS)){
                 connection->SendData(func(*request));
@@ -427,7 +427,11 @@ std::optional<int> Application::AcceptConnection(){
                 ip_address = ipv6_address;
         }
 
-        std::cout << "Connection accepted from " << ip_address << std::endl;
+        logger->Log("Connection accepted from " + ip_address);
         return sockfd;
 
+}
+
+void Application::SetLogger(std::unique_ptr<ILogger> logger){
+        this->logger = std::move(logger);
 }

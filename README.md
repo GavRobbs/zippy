@@ -2,7 +2,7 @@
 
 ## What is This?
 
-A C++ web application framework with an embedded server. It is single-threaded (for now), non-blocking and supports HTTP 1.1. There is no support for HTTPS yet, but I intend to add it soon. It's not super optimized, because its more for learning purposes, but feel free to fork it and go crazy. The API looks a bit like a mix between Django and Node.js, but in C++.
+A C++ web application framework with an embedded server for Linux. It is single-threaded (for now), non-blocking and supports HTTP 1.1. It's not super optimized, because its more for learning purposes, but feel free to fork it and go crazy. The API looks a bit like a mix between Django and Node.js, but in C++.
 
 ## Why?
 
@@ -27,6 +27,7 @@ When it's done.
 - 18/8/24: Made the main loop more efficient by fixing the allocation of the Connection object, also modified the API a bit
 - 18/8/24: Added an interface for buffer reads and created the SocketBufferReader class which is automatically added to the connection class
 - 18/8/24: Created an include file for the exceptions used by the library
+- 19/8/24: Converted the library to a dynamic library and added the beginnings of an extension system using dynamic libraries
 
 ### Current Priorities
 

@@ -10,4 +10,6 @@ class ZippyKeyNotFoundException : public std::runtime_error{
     ~ZippyKeyNotFoundException();
 };
 
+typedef ZippyKeyNotFoundException ZippyExtensionNotFoundException;
+
 #endif
