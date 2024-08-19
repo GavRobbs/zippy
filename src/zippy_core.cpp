@@ -9,118 +9,13 @@
 #include <fcntl.h>
 #include <regex>
 #include <poll.h>
+#include <optional>
 #include "zippy_core.h"
 #include "zippy_utils.h"
+#include "networking/socket_buffer_reader.h"
 
-void Connection::PullData(){
-
-        if(read_remainder == -1){
-
-                std::size_t numBytes;
-                char dataBuffer[8192];
-
-                numBytes = recv(sockfd, dataBuffer, 8191, 0);
-                if(numBytes == -1){
-                        if(errno == EAGAIN || errno == EWOULDBLOCK){
-                                return;
-                        } else{
-                                throw std::runtime_error("Error receiving data, errno is " + errno);
-                        }
-                } else if(numBytes == 0){
-                        return;
-                }
-                dataBuffer[numBytes] = '\0';
-
-                std::string raw_with_header{dataBuffer};
-
-                //Search for content-length headers to get a hint
-                int cl_index = raw_with_header.find("Content-Length:");
-                
-                if(cl_index == std::string::npos){
-                        cl_index = raw_with_header.find("content-length:");
-                }
-
-                if(cl_index == std::string::npos){
-                        //If content length isn't specified, assume it all fits into 8kb
-                        read_remainder = 0;
-                        raw_body = raw_with_header;
-                        return;
-                }
-
-
-                //Extract the number for content length
-                std::string content_length_number = "";
-                std::size_t content_length = 0;
-
-                for(auto it = raw_with_header.begin() + cl_index + 15; it != raw_with_header.end(); ++it){
-
-                        if(*it =='\r' && *(it + 1) == '\n'){
-                                //We've hit the end of the line
-                                break;
-                        }
-
-                        content_length_number += *it;
-                }
-
-                content_length = std::stoul(content_length_number);
-
-                //Calculate the header size, the data size and see how much data has been read
-                std::size_t header_size = raw_with_header.find("\r\n\r\n") + 4;
-                std::size_t data_size = raw_with_header.length() - header_size;
-                std::size_t data_read = numBytes - header_size;
-
-                raw_body = raw_with_header;
-
-                if(data_read >= content_length){
-                        /* If we've read all the data, we can say there's nothing left */
-                        read_remainder = 0;
-                } else{
-                        /* Otherwise we calculate how much data is left, leaving it for another iteration and return*/
-                        read_remainder = content_length - data_read;                        
-                        return;
-                }
-
-        } else if(read_remainder > 0){
-
-                /* If we didn't get all the data last time, we go here.*/
-                
-                std::size_t numBytes;
-                char dataBuffer[8192];
-
-                numBytes = recv(sockfd, dataBuffer, 8191, 0);
-                if(numBytes == -1){
-                        if(errno == EAGAIN || errno == EWOULDBLOCK){
-                                return;
-                        } else{
-                                throw std::runtime_error("Error receiving data, errno is " + errno);
-                        }
-                }
-                dataBuffer[numBytes] = '\0';
-
-                //If there's still more data, we find out how much is left
-                //otherwise, we indicate that we've read everything
-                //and nothing is left
-                if(read_remainder > numBytes){
-                        read_remainder -= numBytes;
-                } else{
-                        read_remainder = 0;
-                }
-
-                //Append the newly read data to the body
-                raw_body += std::string{dataBuffer};
-                return;
-        } else{
-                //If read remainder is 0 then do nothing
-        }
-
-        
-
-}
-
-Connection::Connection(){
-
+Connection::Connection(const int & sockfd):sockfd(sockfd){
         last_alive_time = std::time(0);
-
 }
 
 Connection::~Connection(){
@@ -131,95 +26,26 @@ void Connection::Close(){
         close(sockfd);
 }
 
-bool Connection::AcceptConnection(const int &serverfd){
+std::shared_ptr<HTTPRequest> Connection::ReceiveData(const Application & app){
 
-        socklen_t sin_size;
-        sockaddr_storage their_address;
-        sockfd = accept(serverfd, (sockaddr*)&their_address, &sin_size);
-
-        int flags = fcntl(sockfd, F_GETFL, 0);
-        fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
-
-        if(sockfd < 0){
-                return false;
-        } else{
-
-                if(their_address.ss_family == AF_INET){
-
-                char ipv4_address[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &((sockaddr_in*)&their_address)->sin_addr, ipv4_address, INET_ADDRSTRLEN);
-                ip_address = ipv4_address;
-
-                } else{
-
-                        char ipv6_address[INET6_ADDRSTRLEN];
-                        inet_ntop(AF_INET, &((sockaddr_in6*)&their_address)->sin6_addr, ipv6_address, INET6_ADDRSTRLEN);
-                        ip_address = ipv6_address;
-                }
+        if(reader == nullptr){
+                return nullptr;
         }
 
-        std::cout << "Connection accepted from " << ip_address << std::endl;
-        return true;
-
-}
-
-std::shared_ptr<HTTPRequest> Connection::ReceiveData(){
-
-        if(read_remainder == -1){
-
-                //The connection is awaiting data
-                //if it has data to read pull it
-                if(HasDataToRead()){
-                        PullData();
-                }
-
-        } else if(read_remainder == 0){
-
+        if((!reader->GetStatus()) == IZippyBufferReader::BUFFER_READER_STATUS::INVALID){
                 UpdateLastAliveTime();
-
-                //Indicate that we're done reading this current request
-                //and we're ready to take another one
-                read_remainder = -1;
-
-                //Get the http request data
-                try{
-                        HTTPRequest req = ParseHTTPRequest(raw_body);
-                        return std::make_shared<HTTPRequest>(req);
-                } catch(const std::runtime_error & e){
-                        std::cout << "Empty request avoided" << std::endl;
-                        return nullptr;
-                }
-        } else{
-                
-                UpdateLastAliveTime();
-                //Finish reading the incomplete data
-                PullData();
-
+        }
+        
+        std::optional<std::string> data = reader->ReadData();
+        if(!data.has_value()){
+                return nullptr;
         }
 
-        return nullptr;
-}
-
-bool Connection::HasDataToRead()
-{
-        pollfd fds[1];
-        fds[0].fd = sockfd;
-        fds[0].events = POLLIN;
-
-        int result = poll(fds, 1, 0);
-        if(result > 0){
-                if(fds[0].revents & POLLIN){
-                        return true;
-                } else{
-                        return false;
-                }
-        } else{
-                return false;
-        }
+        return std::make_shared<HTTPRequest>(ParseHTTPRequest(data.value(), app));        
 
 }
 
-HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
+HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw, const Application & app){
 
         if(request_raw == ""){
                 throw std::runtime_error("Empty request passed for parsing");
@@ -434,6 +260,11 @@ int Connection::GetSocketFileDescriptor(){
         return sockfd;
 }
 
+void Connection::SetBufferReader(std::shared_ptr<IZippyBufferReader> reader){
+        this->reader = reader;
+}
+
+
 void Application::Bind(int port){
 
         int yes = 1;
@@ -484,13 +315,17 @@ void Application::Listen(){
 
                         while(true){
 
-                                std::shared_ptr<Connection> connection = std::make_shared<Connection>();
+                                auto new_conn = AcceptConnection();
 
-                                if(connection->AcceptConnection(server_socket_fd)){
+                                if(new_conn.has_value()){
+
+                                        std::shared_ptr<Connection> connection = std::make_shared<Connection>(new_conn.value());
+                                        connection->SetBufferReader(std::make_shared<SocketBufferReader>(new_conn.value()));
                                         connections.push_back(connection);
+
                                 } else{
                                         break;
-                                }                                
+                                }                         
 
                         }                        
                 }
@@ -504,7 +339,7 @@ void Application::Listen(){
         //and remove them from the array
         //If they are not to be closed, then we receive data from them
         for(auto it = connections.begin(); it != connections.end(); ){
-                auto r = (*it)->ReceiveData();
+                auto r = (*it)->ReceiveData(*this);
 
                 if(r != nullptr){
                         ProcessRequest(r, *it);
@@ -550,4 +385,49 @@ void Application::ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shar
                 std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
                 connection->SendData(data);
         }
+}
+
+void Application::AddHeaderParser(std::shared_ptr<HTTPHeaderParser> parser){
+
+        header_parsers[parser->key_name] = parser;
+
+}
+
+std::weak_ptr<HTTPHeaderParser> Application::GetHeaderParsers(const std::string & header_name){
+
+        std::weak_ptr<HTTPHeaderParser> weakPtr = header_parsers[header_name];
+        return weakPtr;
+
+}
+
+std::optional<int> Application::AcceptConnection(){
+
+        socklen_t sin_size;
+        sockaddr_storage their_address;
+        int sockfd = accept(server_socket_fd, (sockaddr*)&their_address, &sin_size);
+        std::string ip_address;
+
+        int flags = fcntl(sockfd, F_GETFL, 0);
+        fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
+        if(sockfd < 0){
+                return std::nullopt;
+        }
+
+        if(their_address.ss_family == AF_INET){
+
+                char ipv4_address[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &((sockaddr_in*)&their_address)->sin_addr, ipv4_address, INET_ADDRSTRLEN);
+                ip_address = ipv4_address;
+
+        } else{
+
+                char ipv6_address[INET6_ADDRSTRLEN];
+                inet_ntop(AF_INET, &((sockaddr_in6*)&their_address)->sin6_addr, ipv6_address, INET6_ADDRSTRLEN);
+                ip_address = ipv6_address;
+        }
+
+        std::cout << "Connection accepted from " << ip_address << std::endl;
+        return sockfd;
+
 }

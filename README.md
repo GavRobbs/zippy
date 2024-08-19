@@ -27,6 +27,8 @@ When it's done.
 
 ### Current Priorities
 
+- Convert most request headers to a key-value type that supports additional data
+- Make the main loop a bit more efficient (remove the allocation of the Connection object every time)
 - Add a file storage backend option
 - Add a templating engine
 - Integrate JSON and XML libraries

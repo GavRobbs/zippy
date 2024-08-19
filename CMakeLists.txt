@@ -12,7 +12,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wall -O3 -march=native"
 
 include_directories(include/)
 
-add_library(${PROJECT_NAME} src/zippy_core.cpp src/zippy_routing.cpp src/zippy_utils.cpp)
+add_library(${PROJECT_NAME} src/zippy_core.cpp src/zippy_routing.cpp src/zippy_utils.cpp src/socket_buffer_reader.cpp src/zippy_exceptions.cpp)
 
 if(ZIPPY_BUILD_DEMO)
     add_executable(ZippyDemo src/main.cpp)

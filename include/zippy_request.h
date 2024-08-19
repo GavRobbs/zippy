@@ -27,4 +27,14 @@ struct HTTPRequest{
         std::string ip_address;
 };
 
+//This is a functor that parses and extracts http headers, so I don't have to hardcode
+//it into the ParseHTTPRequest function.
+struct HTTPHeaderParser{
+
+        std::string key_name;
+        virtual void operator()(HTTPRequestHeader & header, const std::string & header_line) = 0;
+        HTTPHeaderParser(const std::string & key);
+        virtual ~HTTPHeaderParser();
+};
+
 #endif
