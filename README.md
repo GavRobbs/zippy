@@ -24,11 +24,13 @@ When it's done.
 - 17/8/24: Fixed the trie implementation and added unit tests for it
 - 17/8/24: Cleaned up the root CMakeLists file a bit and added two options
 - 17/8/24: Set up CI with Github Actions
+- 18/8/24: Made the main loop more efficient by fixing the allocation of the Connection object, also modified the API a bit
+- 18/8/24: Added an interface for buffer reads and created the SocketBufferReader class which is automatically added to the connection class
+- 18/8/24: Created an include file for the exceptions used by the library
 
 ### Current Priorities
 
 - Convert most request headers to a key-value type that supports additional data
-- Make the main loop a bit more efficient (remove the allocation of the Connection object every time)
 - Add a file storage backend option
 - Add a templating engine
 - Integrate JSON and XML libraries

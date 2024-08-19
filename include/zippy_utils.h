@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <map>
-#include "zippy_exceptions.h"
+#include "exceptions/zippy_exceptions.h"
 
 struct ZippyFile{
         std::string name;
