@@ -10,11 +10,12 @@
 #include <regex>
 #include <poll.h>
 #include <optional>
+#include <mutex>
 #include "zippy_core.h"
 #include "zippy_utils.h"
 #include "networking/socket_buffer_reader.h"
 
-Connection::Connection(const int & sockfd):sockfd(sockfd){
+Connection::Connection(const int & sockfd, Router & r, std::shared_ptr<ILogger> logger):sockfd(sockfd), router(r), logger(logger){
         last_alive_time = std::time(0);
 }
 
@@ -26,7 +27,7 @@ void Connection::Close(){
         close(sockfd);
 }
 
-std::shared_ptr<HTTPRequest> Connection::ReceiveData(const Application & app){
+std::shared_ptr<HTTPRequest> Connection::ReceiveData(){
 
         if(reader == nullptr){
                 return nullptr;
@@ -41,11 +42,29 @@ std::shared_ptr<HTTPRequest> Connection::ReceiveData(const Application & app){
                 return nullptr;
         }
 
-        return std::make_shared<HTTPRequest>(ParseHTTPRequest(data.value(), app));        
+        return std::make_shared<HTTPRequest>(ParseHTTPRequest(data.value()));        
 
 }
 
-HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw, const Application & app){
+void Connection::ProcessRequest(std::shared_ptr<HTTPRequest> request){
+
+        RouteFunction func;
+
+        if(request == nullptr){
+                return;
+        }
+
+        logger->Log("Request path is: " + request->header.path);
+
+        if(router.FindRoute(request->header.path, func, request->URL_PARAMS)){
+                SendData(func(*request));
+        } else{
+                std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
+                SendData(data);
+        }
+}
+
+HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
 
         if(request_raw == ""){
                 throw std::runtime_error("Empty request passed for parsing");
@@ -258,8 +277,46 @@ int Connection::GetSocketFileDescriptor(){
         return sockfd;
 }
 
-void Connection::SetBufferReader(std::shared_ptr<IZippyBufferReader> reader){
-        this->reader = reader;
+void Connection::SetBufferReader(std::unique_ptr<IZippyBufferReader> reader){
+        this->reader = std::move(reader);
+}
+
+void Connection::operator()(){
+        while(!ForClosure()){
+                auto r = ReceiveData();
+
+                if(r != nullptr){
+                        ProcessRequest(r);
+                }
+
+                SendBufferedData();
+        }
+
+        Close();
+}
+
+Connection::Connection(Connection && other) noexcept : router(other.router), sockfd(other.sockfd), ip_address(other.ip_address), last_alive_time(other.last_alive_time), current_headers(other.current_headers), hasToWrite(other.hasToWrite), toClose(other.toClose), reader(std::move(other.reader)), logger(other.logger), send_buffer(other.send_buffer) {
+
+}
+
+Connection & Connection::operator=(Connection && other) noexcept{
+
+        if(this != &other){
+
+                router = other.router;
+                sockfd = other.sockfd;
+                ip_address = other.ip_address;
+                last_alive_time = other.last_alive_time;
+                current_headers = other.current_headers;
+                hasToWrite = other.hasToWrite;
+                toClose = other.toClose;
+                reader = std::move(other.reader);
+                logger = other.logger;
+                send_buffer = other.send_buffer;
+        }
+
+        return *this;
+
 }
 
 
@@ -317,9 +374,10 @@ void Application::Listen(){
 
                                 if(new_conn.has_value()){
 
-                                        std::shared_ptr<Connection> connection = std::make_shared<Connection>(new_conn.value());
-                                        connection->SetBufferReader(std::make_shared<SocketBufferReader>(new_conn.value()));
-                                        connections.push_back(connection);
+                                        auto connection = std::make_unique<Connection>(new_conn.value(), router, logger);
+                                        connection->SetBufferReader(std::make_unique<SocketBufferReader>(new_conn.value()));
+                                        connections.emplace(std::move(connection));
+                                        condition.notify_one();
 
                                 } else{
                                         break;
@@ -333,25 +391,7 @@ void Application::Listen(){
                 throw std::runtime_error("Polling error when checking connections");
         }
 
-        //We iterate through all the connections, close those that need to be closed
-        //and remove them from the array
-        //If they are not to be closed, then we receive data from them
-        for(auto it = connections.begin(); it != connections.end(); ){
-                auto r = (*it)->ReceiveData(*this);
 
-                if(r != nullptr){
-                        ProcessRequest(r, *it);
-                }
-
-                (*it)->SendBufferedData();
-
-                if((*it)->ForClosure()){
-                        (*it)->Close();
-                        it = connections.erase(it);
-                } else{
-                        ++it;
-                }
-        }
 }
 
 Router & Application::GetRouter()
@@ -363,28 +403,56 @@ Application::Application():router(Router{}){
 
         SetLogger(std::make_unique<NullLogger>());
 
+        /* TODO: Increase the connection thread pool size - allow it to be specified in a configuration file. 
+        We create the connection thread pool here and have it go through all the pending connections.*/
+
+        for(size_t i = 0; i < 5; ++i){
+                connection_thread_pool.emplace_back([this](){
+                        while(true){
+                                std::unique_ptr<Connection> conn = nullptr;
+
+                                {
+                                        std::unique_lock<std::mutex> lock(connection_queue_mutex);
+                                        this->condition.wait(lock, [this](){
+                                                return !this->connections.empty() || stopApplicationFlag;
+                                        });
+
+                                        std::cout << "Thread woken up" << std::endl;
+
+                                        if(connections.empty() || stopApplicationFlag){
+                                                return;
+                                        }
+
+                                        std::cout << "Going to pull a task from the queue" << std::endl;
+
+                                        conn = std::move(this->connections.front());
+                                        this->connections.pop();
+
+                                }
+
+                                (*conn)();
+                                
+                        }
+                });
+        }
+
 }
 
 Application::~Application(){
+
+        //Gracefully shut down all running threads and close the server socket
+        {
+                std::unique_lock<std::mutex> lock(connection_queue_mutex);
+                stopApplicationFlag = true;
+        }
+
+        condition.notify_all();
+        for(auto & connection_thread : connection_thread_pool){
+                if(connection_thread.joinable()){
+                        connection_thread.join();
+                }
+        }
         close(server_socket_fd);
-}
-
-void Application::ProcessRequest(std::shared_ptr<HTTPRequest> request, std::shared_ptr<Connection> connection){
-
-        RouteFunction func;
-
-        if(request == nullptr){
-                return;
-        }
-
-        logger->Log("Request path is: " + request->header.path);
-
-        if(router.FindRoute(request->header.path, func, request->URL_PARAMS)){
-                connection->SendData(func(*request));
-        } else{
-                std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
-                connection->SendData(data);
-        }
 }
 
 void Application::AddHeaderParser(std::shared_ptr<HTTPHeaderParser> parser){

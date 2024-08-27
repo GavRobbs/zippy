@@ -10,18 +10,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -O0")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wall -O3 -march=native")
 
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(Threads REQUIRED)
+
 include_directories(include/)
 
 add_library(${PROJECT_NAME} SHARED src/zippy_core.cpp src/zippy_routing.cpp src/zippy_utils.cpp src/socket_buffer_reader.cpp src/zippy_exceptions.cpp src/extension_factory.cpp)
-target_link_libraries(${PROJECT_NAME} dl)
+target_link_libraries(${PROJECT_NAME} dl Threads::Threads)
 
 add_library(ZippyConsoleLogger SHARED src/extensions/console_logger.cpp)
-target_link_libraries(ZippyConsoleLogger ${PROJECT_NAME})
+target_link_libraries(ZippyConsoleLogger ${PROJECT_NAME} Threads::Threads)
 set_target_properties(ZippyConsoleLogger PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/extensions/")
 
 add_library(ZippyFileLogger SHARED src/extensions/file_logger.cpp)
-target_link_libraries(ZippyFileLogger ${PROJECT_NAME})
+target_link_libraries(ZippyFileLogger ${PROJECT_NAME} Threads::Threads)
 set_target_properties(ZippyFileLogger PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/extensions/")
 
