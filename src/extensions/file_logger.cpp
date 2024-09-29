@@ -9,12 +9,10 @@ class FileLogger : public ILogger{
 
     public:
     void Log(const std::string & text){
-        std::lock_guard<std::mutex> lock{outputMutex};
         file << text << std::endl;
     }
 
     void Log(const std::string & tag, const std::string & text){
-        std::lock_guard<std::mutex> lock{outputMutex};
         file << tag << " " << text << std::endl;
     }
 
@@ -32,8 +30,6 @@ class FileLogger : public ILogger{
 
     private:
     std::ofstream file;
-    private:
-    std::mutex outputMutex;
 };
 
 extern "C" std::string Zippy_QueryExtensionCategory(){

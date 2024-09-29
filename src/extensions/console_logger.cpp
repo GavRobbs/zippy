@@ -8,12 +8,10 @@ class ConsoleLogger : public ILogger{
 
     public:
     void Log(const std::string & text){
-        std::lock_guard<std::mutex> lock{outputMutex};
         std::cout << text << std::endl;
     }
 
     void Log(const std::string & tag, const std::string & text){
-        std::lock_guard<std::mutex> lock{outputMutex};
         std::cout << tag << " " << text << std::endl;
     }
 
@@ -25,8 +23,6 @@ class ConsoleLogger : public ILogger{
 
     }
 
-    private:
-    std::mutex outputMutex;
 };
 
 extern "C" std::string Zippy_QueryExtensionCategory(){

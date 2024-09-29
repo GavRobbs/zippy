@@ -14,8 +14,9 @@
 #include "zippy_core.h"
 #include "zippy_utils.h"
 #include "networking/socket_buffer_reader.h"
+#include "networking/socket_buffer_writer.h"
 
-Connection::Connection(const int & sockfd, Router & r, std::shared_ptr<ILogger> logger):sockfd(sockfd), router(r), logger(logger){
+Connection::Connection(uv_tcp_t * conn, Router & r, std::shared_ptr<ILogger> logger):client_connection(conn), router(r), logger(logger){
         last_alive_time = std::time(0);
 }
 
@@ -24,40 +25,21 @@ Connection::~Connection(){
 
 void Connection::Close(){
         //std::cout << "Closing connection identified by " << sockfd << std::endl;
-        close(sockfd);
+        uv_close((uv_handle_t*)client_connection, NULL);
 }
 
-std::shared_ptr<HTTPRequest> Connection::ReceiveData(){
-
-        if(reader == nullptr){
-                return nullptr;
-        }
-
-        if((!reader->GetStatus()) == IZippyBufferReader::BUFFER_READER_STATUS::INVALID){
-                UpdateLastAliveTime();
-        }
-        
-        std::optional<std::string> data = reader->ReadData();
-        if(!data.has_value()){
-                return nullptr;
-        }
-
-        return std::make_shared<HTTPRequest>(ParseHTTPRequest(data.value()));        
-
+void Connection::ReadData(){
+        reader->ReadData();
 }
 
-void Connection::ProcessRequest(std::shared_ptr<HTTPRequest> request){
+void Connection::ProcessRequest(HTTPRequest & request){
 
         RouteFunction func;
 
-        if(request == nullptr){
-                return;
-        }
+        logger->Log("Request path is: " + request.header.path);
 
-        logger->Log("Request path is: " + request->header.path);
-
-        if(router.FindRoute(request->header.path, func, request->URL_PARAMS)){
-                SendData(func(*request));
+        if(router.FindRoute(request.header.path, func, request.URL_PARAMS)){
+                SendData(func(request));
         } else{
                 std::string data = ZippyUtils::BuildHTTPResponse(404, "Not found.", {}, "");
                 SendData(data);
@@ -206,52 +188,10 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
         return request;
 }
 
-void Connection::SendBufferedData(){
-
-        //If the buffers are empty, return
-
-        UpdateLastAliveTime();
-
-        if(send_buffer.empty()){
-
-                hasToWrite = false;
-                return;
-        }
-
-        size_t bytes_sent{0};
-
-        auto it = send_buffer.begin();
-
-        //Send bytes via the socket
-        bytes_sent = send(sockfd, it->c_str(), it->length(), 0);
-
-        //Check if there was an error sending the data
-        if(bytes_sent == -1){
-                throw std::runtime_error("Error sending data");
-        }
-
-        //if the number of bytes sent was less than the length of the entry
-        //chop up the string so we have the remainder to send next time
-        //Otherwise, erase it
-        if(bytes_sent < it->length()){
-                *it = it->substr(bytes_sent, it->length());
-        } else{
-                send_buffer.erase(it);
-        }
-
-        if(send_buffer.empty()){
-                hasToWrite = false;
-                toClose = true;
-        } else{
-                hasToWrite = true;
-        }
-}
-
 void Connection::SendData(std::string data){
 
         UpdateLastAliveTime();
-        send_buffer.push_back(data);
-
+        writer->Write(std::vector<unsigned char>{data.begin(), data.end()});
 }
 
 void Connection::UpdateLastAliveTime()
@@ -273,29 +213,27 @@ bool Connection::ForClosure(){
         return diff > 5;
 }
 
-int Connection::GetSocketFileDescriptor(){
-        return sockfd;
-}
-
 void Connection::SetBufferReader(std::unique_ptr<IZippyBufferReader> reader){
         this->reader = std::move(reader);
 }
 
-void Connection::operator()(){
-        while(!ForClosure()){
-                auto r = ReceiveData();
-
-                if(r != nullptr){
-                        ProcessRequest(r);
-                }
-
-                SendBufferedData();
-        }
-
-        Close();
+void Connection::SetBufferWriter(std::unique_ptr<IZippyBufferWriter> writer){
+        this->writer = std::move(writer);
 }
 
-Connection::Connection(Connection && other) noexcept : router(other.router), sockfd(other.sockfd), ip_address(other.ip_address), last_alive_time(other.last_alive_time), current_headers(other.current_headers), hasToWrite(other.hasToWrite), toClose(other.toClose), reader(std::move(other.reader)), logger(other.logger), send_buffer(other.send_buffer) {
+IZippyBufferReader * Connection::GetBufferReader(){
+        return this->reader.get();
+}
+
+IZippyBufferWriter * Connection::GetBufferWriter(){
+        return this->writer.get();
+}
+
+ILogger* Connection::GetLogger(){
+        return this->logger.get();
+}
+
+Connection::Connection(Connection && other) noexcept : router(other.router), client_connection(other.client_connection), ip_address(other.ip_address), last_alive_time(other.last_alive_time), current_headers(other.current_headers), hasToWrite(other.hasToWrite), toClose(other.toClose), reader(std::move(other.reader)), writer(std::move(other.writer)), logger(other.logger), send_buffer(other.send_buffer) {
 
 }
 
@@ -304,13 +242,14 @@ Connection & Connection::operator=(Connection && other) noexcept{
         if(this != &other){
 
                 router = other.router;
-                sockfd = other.sockfd;
+                client_connection = other.client_connection;
                 ip_address = other.ip_address;
                 last_alive_time = other.last_alive_time;
                 current_headers = other.current_headers;
                 hasToWrite = other.hasToWrite;
                 toClose = other.toClose;
                 reader = std::move(other.reader);
+                writer = std::move(other.writer);
                 logger = other.logger;
                 send_buffer = other.send_buffer;
         }
@@ -320,78 +259,49 @@ Connection & Connection::operator=(Connection && other) noexcept{
 }
 
 
-void Application::Bind(int port){
+void Application::BindAndListen(int port){
 
-        int yes = 1;
+        loop = uv_default_loop();
+        uv_tcp_init(loop, &server);
 
-        sockaddr_in address;
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = INADDR_ANY;
-        address.sin_port = htons(port);
+        sockaddr_in addr;
+        uv_ip4_addr("0.0.0.0", port, &addr);
+        uv_tcp_bind(&server, (const sockaddr*)&addr, 0);
 
-        if((server_socket_fd = socket(AF_INET, SOCK_STREAM, 0)) <= 0){
-                throw std::runtime_error("Could not get socket!");
-        }
+        server.data = this;
 
-        if (setsockopt(server_socket_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &yes, sizeof(yes))) {
-                close(server_socket_fd);
-                throw std::runtime_error("Setting socket options failed");
-        }
+        int rc = uv_listen((uv_stream_t*)&server, 128, [](uv_stream_t * svr, int status){
 
-        //This makes our server non-blocking
-        int flags = fcntl(server_socket_fd, F_GETFL, 0);
-        fcntl(server_socket_fd, F_SETFL, flags | O_NONBLOCK);
+                Application * app = static_cast<Application*>(svr->data);
 
-        if(bind(server_socket_fd, (sockaddr*)&address, sizeof(address)) < 0){
-                close(server_socket_fd);
-                throw std::runtime_error("Failed to bind socket to port " + port);
-        }
+                if(status < 0){
+                        app->logger->Log("New connection error " + std::string{uv_strerror(status)});
+                }
 
+                uv_tcp_t * client = new uv_tcp_t;
+                uv_tcp_init(app->loop, client);
 
-        if(listen(server_socket_fd, 50) == -1){
-                close(server_socket_fd);
-                throw std::runtime_error("Failed to start listening on port " + port);
-        } else{ 
+                if(uv_accept(svr, (uv_stream_t*)client) == 0){
+                        app->logger->Log("New connection accepted");
+                        Connection * c = new Connection{client, app->GetRouter(), app->logger};
+                        client->data = (void*)c;
+                        c->SetBufferReader(std::make_unique<SocketBufferReader>((uv_stream_t*)client));
+                        c->SetBufferWriter(std::make_unique<SocketBufferWriter>((uv_stream_t*)client));
+                        c->ReadData();
+                } else{
+                        uv_close((uv_handle_t*)client, NULL);
+                        app->logger->Log("New connection rejected");
+                }
+
+        });
+        
+        if(rc){
+                logger->Log("Listen error: " + std::string(uv_strerror(rc)));
+        } else{
                 logger->Log("Zippy application bound to port " + port);
         }
 
-}
-        
-void Application::Listen(){
-
-
-        pollfd fds[1];
-        fds[0].fd = server_socket_fd;
-        fds[0].events = POLLIN;
-
-        int result = poll(fds, 1, 0);
-        if(result > 0){
-                if(fds[0].revents & POLLIN){
-
-                        while(true){
-
-                                auto new_conn = AcceptConnection();
-
-                                if(new_conn.has_value()){
-
-                                        auto connection = std::make_unique<Connection>(new_conn.value(), router, logger);
-                                        connection->SetBufferReader(std::make_unique<SocketBufferReader>(new_conn.value()));
-                                        connections.emplace(std::move(connection));
-                                        condition.notify_one();
-
-                                } else{
-                                        break;
-                                }                         
-
-                        }                        
-                }
-        } else if(result == 0){
-
-        } else{
-                throw std::runtime_error("Polling error when checking connections");
-        }
-
-
+        uv_run(loop, UV_RUN_DEFAULT);
 }
 
 Router & Application::GetRouter()
@@ -403,56 +313,10 @@ Application::Application():router(Router{}){
 
         SetLogger(std::make_unique<NullLogger>());
 
-        /* TODO: Increase the connection thread pool size - allow it to be specified in a configuration file. 
-        We create the connection thread pool here and have it go through all the pending connections.*/
-
-        for(size_t i = 0; i < 5; ++i){
-                connection_thread_pool.emplace_back([this](){
-                        while(true){
-                                std::unique_ptr<Connection> conn = nullptr;
-
-                                {
-                                        std::unique_lock<std::mutex> lock(connection_queue_mutex);
-                                        this->condition.wait(lock, [this](){
-                                                return !this->connections.empty() || stopApplicationFlag;
-                                        });
-
-                                        std::cout << "Thread woken up" << std::endl;
-
-                                        if(connections.empty() || stopApplicationFlag){
-                                                return;
-                                        }
-
-                                        std::cout << "Going to pull a task from the queue" << std::endl;
-
-                                        conn = std::move(this->connections.front());
-                                        this->connections.pop();
-
-                                }
-
-                                (*conn)();
-                                
-                        }
-                });
-        }
-
 }
 
 Application::~Application(){
 
-        //Gracefully shut down all running threads and close the server socket
-        {
-                std::unique_lock<std::mutex> lock(connection_queue_mutex);
-                stopApplicationFlag = true;
-        }
-
-        condition.notify_all();
-        for(auto & connection_thread : connection_thread_pool){
-                if(connection_thread.joinable()){
-                        connection_thread.join();
-                }
-        }
-        close(server_socket_fd);
 }
 
 void Application::AddHeaderParser(std::shared_ptr<HTTPHeaderParser> parser){
@@ -465,38 +329,6 @@ std::weak_ptr<HTTPHeaderParser> Application::GetHeaderParsers(const std::string 
 
         std::weak_ptr<HTTPHeaderParser> weakPtr = header_parsers[header_name];
         return weakPtr;
-
-}
-
-std::optional<int> Application::AcceptConnection(){
-
-        socklen_t sin_size;
-        sockaddr_storage their_address;
-        int sockfd = accept(server_socket_fd, (sockaddr*)&their_address, &sin_size);
-        std::string ip_address;
-
-        int flags = fcntl(sockfd, F_GETFL, 0);
-        fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
-
-        if(sockfd < 0){
-                return std::nullopt;
-        }
-
-        if(their_address.ss_family == AF_INET){
-
-                char ipv4_address[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &((sockaddr_in*)&their_address)->sin_addr, ipv4_address, INET_ADDRSTRLEN);
-                ip_address = ipv4_address;
-
-        } else{
-
-                char ipv6_address[INET6_ADDRSTRLEN];
-                inet_ntop(AF_INET, &((sockaddr_in6*)&their_address)->sin6_addr, ipv6_address, INET6_ADDRSTRLEN);
-                ip_address = ipv6_address;
-        }
-
-        logger->Log("Connection accepted from " + ip_address);
-        return sockfd;
 
 }
 

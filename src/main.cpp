@@ -68,8 +68,6 @@ int main(int argc, char **argv){
 
         app.SetLogger(std::unique_ptr<ILogger>(logger));
 
-        app.Bind(3500);
-
         app.GetRouter().AddRoute("/", [](const HTTPRequest & request) -> std::string {
 
                 return ZippyUtils::BuildHTTPResponse(200, "OK", {}, webpage_body);
@@ -119,12 +117,10 @@ int main(int argc, char **argv){
                         }, ss.str());
 
         });
+
+        app.BindAndListen(3500);
+
         
-        while(true){
-
-                app.Listen();
-
-        }
         return 0;
 }
 

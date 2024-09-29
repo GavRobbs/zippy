@@ -30,6 +30,7 @@ When it's done.
 - 19/8/24: Converted the library to a dynamic library and added the beginnings of an extension system using dynamic libraries
 - 20/8/24: Converted the library to a multithreaded connection system
 - 21/8/24: Rewrote the console logger and file logger extensions to be thread safe
+- 29/9/24: Rewrote the core connection code code to use the libuv event loop
 
 ### Current Priorities
 

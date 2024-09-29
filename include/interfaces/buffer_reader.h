@@ -1,5 +1,5 @@
-#ifndef ZIPPY_BUFFER_READER
-#define ZIPPY_BUFFER_READER
+#ifndef ZIPPY_BUFFER_READER_H
+#define ZIPPY_BUFFER_READER_H
 
 #include <string>
 #include <optional>
@@ -13,8 +13,9 @@ class IZippyBufferReader{
 
     enum BUFFER_READER_STATUS : int { IDLE, READING, COMPLETE, INVALID };
 
-    virtual std::optional<std::string> ReadData() = 0;
+    virtual void ReadData() = 0;
     virtual BUFFER_READER_STATUS GetStatus() = 0;
+    virtual void Reset() = 0;
     virtual ~IZippyBufferReader() noexcept = default;
 };
 
