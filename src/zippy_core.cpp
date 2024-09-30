@@ -52,6 +52,7 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
                 throw std::runtime_error("Empty request passed for parsing");
         }
 
+
         std::vector<std::string> header_lines{};
         std::string header_line;
         HTTPRequest request;
