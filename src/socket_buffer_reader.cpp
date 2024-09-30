@@ -31,7 +31,7 @@ void SocketBufferReader::ReadData(){
                 buf->base = new char[suggested_size];
                 buf->len = suggested_size;
         }, 
-        [](uv_stream_t * client, int nread, const uv_buf_t * buf){
+        [](uv_stream_t * client, ssize_t nread, const uv_buf_t * buf){
 
                 //Fetch the socket buffer reader object
                 auto conn =  static_cast<Connection*>(client->data);
