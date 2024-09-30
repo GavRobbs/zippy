@@ -34,27 +34,35 @@ class Connection
         Connection(Connection && other) noexcept;
         Connection & operator=(Connection && other) noexcept;
         ~Connection();
-        void Close();
-        void UpdateLastAliveTime();
-        bool ForClosure();
 
         void SetBufferReader(std::unique_ptr<IZippyBufferReader> reader);
         void SetBufferWriter(std::unique_ptr<IZippyBufferWriter> writer);
+        void SetConnectionTimer(uv_timer_t * timer);
+
         IZippyBufferReader * GetBufferReader();
         IZippyBufferWriter * GetBufferWriter();
         ILogger* GetLogger();
+        uv_timer_t * GetConnectionTimer();
+
+        bool Close();
+        bool IsForClosure();
+        
         std::string BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body);
         HTTPRequest ParseHTTPRequest(const std::string & request_raw);
+        HTTPRequestHeader GetCurrentHeaders();
+
         void ProcessRequest(HTTPRequest & request);
+        void ResetTimer();
 
         private:
         uv_tcp_t * client_connection;
+        uv_timer_t * connection_timer;
         std::string ip_address;
 
-        std::time_t last_alive_time;
+        bool timer_set = false;
+
         HTTPRequestHeader current_headers;
 
-        bool hasToWrite{false};
         bool toClose{false};
 
         std::vector<std::string> send_buffer;
@@ -63,6 +71,7 @@ class Connection
         std::unique_ptr<IZippyBufferWriter> writer;
         Router & router;
 
+        void StartTimer();
 };
 
 class Application{

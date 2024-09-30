@@ -1,19 +1,28 @@
 #include "extensions/extension_factory.h"
 #include "logging/ilogger.h"
-#include <iostream>
 #include <memory>
 #include <fstream>
-#include <mutex>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
 
 class FileLogger : public ILogger{
 
     public:
     void Log(const std::string & text){
-        file << text << std::endl;
+        auto now = std::chrono::system_clock::now();
+        std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+        std::tm* local_time = std::localtime(&now_time);
+
+        file << "[" << std::put_time(local_time, "%Y-%m-%d %H:%M:%S") << "] " << text << std::endl;
     }
 
     void Log(const std::string & tag, const std::string & text){
-        file << tag << " " << text << std::endl;
+        auto now = std::chrono::system_clock::now();
+        std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+        std::tm* local_time = std::localtime(&now_time);
+
+        file << "[" << std::put_time(local_time, "%Y-%m-%d %H:%M:%S") << "] " << tag << ": " << text << std::endl;
     }
 
     ~FileLogger(){

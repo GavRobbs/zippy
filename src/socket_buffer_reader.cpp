@@ -24,6 +24,15 @@ SocketBufferReader::~SocketBufferReader(){
 
 void SocketBufferReader::ReadData(){
 
+        auto conn =  static_cast<Connection*>(client_socket->data);
+        if(conn == NULL || conn->IsForClosure()){
+                return;
+        }
+
+        //This doesn't do anything if its the first read or it has no keepalive
+        //Otherwise it refreshes the timer everytime we try to read new data
+        conn->ResetTimer();
+
         uv_read_start(client_socket, [](uv_handle_t *handle, std::size_t suggested_size, uv_buf_t *buf){
 
                 //This lambda just allocates the data
@@ -45,10 +54,9 @@ void SocketBufferReader::ReadData(){
 
                 if(nread > 0){
                         //Read the data
+                        conn->ResetTimer();
                         sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::READING;
                         sbr->raw_body += std::string{buf->base};
-
-                        conn->GetLogger()->Log("Reading data");
 
                         /* If we don't know for sure that we've finished the header, check to see if we have
                         and determine where the body starts.*/
@@ -56,7 +64,6 @@ void SocketBufferReader::ReadData(){
 
                                 std::size_t body_start = sbr->raw_body.find("\r\n\r\n");
                                 if(body_start != std::string::npos){
-                                        conn->GetLogger()->Log("Header not finished but we found it!");
                                         sbr->finishedHeader = true;
                                         sbr->body_start_index = body_start + 4;
 
@@ -104,8 +111,9 @@ void SocketBufferReader::ReadData(){
                                 sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::INVALID;
                         }
                 } else if(nread == 0){
+                        conn->ResetTimer();
                         conn->GetLogger()->Log("Not sure if more data is left");
-                        sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE;
+                        //sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE;
                         //TODO: Check the keep-alive here
                 }
 
@@ -113,20 +121,21 @@ void SocketBufferReader::ReadData(){
                         if(sbr->detectedContentLength){
                                 if(sbr->raw_body.length() >= sbr->content_length){
                                         sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE;
-                                        conn->GetLogger()->Log("The request was sucessfully read!");
                                 }
                         } else if(sbr->detectedChunks){
                                 if(sbr->raw_body.find("0\r\n\r\n") != std::string::npos){
                                         sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE;
-                                        conn->GetLogger()->Log("The request was sucessfully read!");
                                 }
                         } else{
                                 sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE;
-                                conn->GetLogger()->Log("The request was sucessfully read!");
                         }
-                        HTTPRequest request = conn->ParseHTTPRequest(sbr->raw_body);
-                        conn->ProcessRequest(request);
-                        sbr->Reset();                        
+
+                        if(sbr->status == IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE){
+                                HTTPRequest request = conn->ParseHTTPRequest(sbr->raw_body);
+                                conn->ProcessRequest(request);
+                                sbr->Reset();    
+                        }
+                                            
                 }
                 
 

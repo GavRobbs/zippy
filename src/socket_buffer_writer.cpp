@@ -18,11 +18,16 @@ void SocketBufferWriter::Write(std::vector<unsigned char> data){
 
         auto cs = static_cast<uv_stream_t*>(wr->data);
         auto conn = static_cast<Connection*>(cs->data);
+        conn->ResetTimer();
 
         if(status < 0){
             conn->GetLogger()->Log(std::string{"Write error: "} + uv_strerror(status));
         } else{
-            conn->GetLogger()->Log("Wrote data!");
+            if(conn->GetCurrentHeaders().keep_alive == false || conn->IsForClosure() == true){
+                if(conn->Close()){
+                    delete conn;
+                }
+            }
         }
 
         delete wr;

@@ -2,7 +2,7 @@
 
 ## What is This?
 
-A C++ web application framework with an embedded server for Linux. It is ~~single-threaded~~ **multithreaded**, non-blocking and supports HTTP 1.1. It's not super optimized, because its more for learning purposes, but feel free to fork it and go crazy. The API looks a bit like a mix between Django and Node.js, but in C++.
+A C++ web application framework with an embedded server for Linux. It uses a non-blocking event loop and supports HTTP 1.1. It's not super optimized, because its more for learning purposes, but feel free to fork it and optimize away. The API looks a bit like a mix between Django and Node.js, but in C++.
 
 ## Why?
 
@@ -31,6 +31,9 @@ When it's done.
 - 20/8/24: Converted the library to a multithreaded connection system
 - 21/8/24: Rewrote the console logger and file logger extensions to be thread safe
 - 29/9/24: Rewrote the core connection code code to use the libuv event loop
+- 30/9/24: Fixed some memory leakage and the overall stability of the core connection code
+- 30/9/24: Added date and time to the loggers
+- 30/9/24: Removed the threads requirement from the CMakeLists.txt file
 
 ### Current Priorities
 

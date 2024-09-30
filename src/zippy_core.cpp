@@ -17,15 +17,57 @@
 #include "networking/socket_buffer_writer.h"
 
 Connection::Connection(uv_tcp_t * conn, Router & r, std::shared_ptr<ILogger> logger):client_connection(conn), router(r), logger(logger){
-        last_alive_time = std::time(0);
 }
 
 Connection::~Connection(){
+        if(connection_timer != NULL){
+                delete connection_timer;
+        }
 }
 
-void Connection::Close(){
-        //std::cout << "Closing connection identified by " << sockfd << std::endl;
-        uv_close((uv_handle_t*)client_connection, NULL);
+bool Connection::Close(){
+        
+        /* There were a few interesting bugs I worked through here:
+                -Initially, I just called uv_close. The system didn't like that very much and I got a
+                uv_close assertion 0 error. Apparently, you can't just close the socket mid transfer
+                and expect it to be fine, you have to stop it from reading and ensure its stopped writing.
+                - Also uv_close does not fail gracefully if the socket has been already closed.
+                - uv_is_closing checks if the socket is already closed, and uv_read_stop forces it to stop reading
+                - Writing is a bit more difficult, as there is no explicit write stop, so what I did was have my
+                SocketBufferReader class check if toClose is active, and do the closing of the connection from there
+                if so.
+                - I was still getting segfaults, and then I realized that I never explicitly stopped the timer either,
+                because although the connection is dead, the loop is continuing. I changed the code to facilitate that
+                and it seems to work.
+        */
+
+        toClose = true;
+
+        if(connection_timer != NULL){
+
+                if(uv_is_active((uv_handle_t*)connection_timer)){
+                        uv_timer_stop(connection_timer);
+                }
+
+        }
+
+        if(!uv_is_closing((uv_handle_t*)client_connection)){
+
+
+                uv_read_stop((uv_stream_t*)&client_connection);
+                if(client_connection->write_queue_size == 0){
+                        uv_close((uv_handle_t*)client_connection, NULL);
+                        return true;
+                } else{
+                        return false;
+                }
+        }
+
+        return true;
+}
+
+bool Connection::IsForClosure(){
+        return toClose;
 }
 
 void Connection::ReadData(){
@@ -35,8 +77,6 @@ void Connection::ReadData(){
 void Connection::ProcessRequest(HTTPRequest & request){
 
         RouteFunction func;
-
-        logger->Log("Request path is: " + request.header.path);
 
         if(router.FindRoute(request.header.path, func, request.URL_PARAMS)){
                 SendData(func(request));
@@ -78,6 +118,8 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
                         break;
                 }
         }
+
+        logger->Log(header_lines[0]);
 
         //Get the URL from the request
         try{
@@ -173,9 +215,11 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
 
                         if(value == "keep-alive"){
                                 header.keep_alive = true;
-                                //std::cout << "Keep alive is on" << std::endl;
-                        } else{
+                                StartTimer();
+                        } else if(value == "close"){
                                 header.keep_alive = false;
+                        } else{
+                                //Undefined value, should really throw an error here
                         }
                 } else if(key == "content-length"){
                         header.content_length = std::stoul(value);
@@ -189,29 +233,74 @@ HTTPRequest Connection::ParseHTTPRequest(const std::string &request_raw){
         return request;
 }
 
+HTTPRequestHeader Connection::GetCurrentHeaders(){
+
+        return this->current_headers;
+}
+
 void Connection::SendData(std::string data){
 
-        UpdateLastAliveTime();
         writer->Write(std::vector<unsigned char>{data.begin(), data.end()});
 }
 
-void Connection::UpdateLastAliveTime()
-{
-        if(!current_headers.keep_alive){
+uv_timer_t * Connection::GetConnectionTimer(){
+        return connection_timer;
+}
+
+void Connection::SetConnectionTimer(uv_timer_t * timer){
+        connection_timer = timer;
+
+}
+
+void Connection::StartTimer(){
+
+        if(toClose){
                 return;
         }
 
-        last_alive_time = std::time(0);
+        connection_timer = new uv_timer_t;
+        timer_set = true;
+        uv_timer_init(uv_default_loop(), connection_timer);
+        connection_timer->data = this;
+        uv_timer_start(connection_timer, [](uv_timer_t * handle){
+
+                Connection * c = (Connection*)handle->data;
+
+                if(c != NULL){
+                        //c->GetLogger()->Log("Connection closed via timeout");
+                        c->Close();
+                        delete c;
+                }
+                
+
+        }, 10000, 0);
+
 }
 
-bool Connection::ForClosure(){
+void Connection::ResetTimer(){
 
-        if(!current_headers.keep_alive){
-                return toClose;
-        }        
+        if(toClose){
+                return;
+        }
 
-        time_t diff = std::time(0) - last_alive_time;
-        return diff > 5;
+        if(timer_set){
+
+                uv_timer_stop(connection_timer);
+                connection_timer->data = this;
+                uv_timer_start(connection_timer, [](uv_timer_t * handle){
+
+                        Connection * c = (Connection*)handle->data;
+
+                        if(c != NULL && !c->IsForClosure()){
+                                //c->GetLogger()->Log("Connection closed via timeout");
+                                c->Close();
+                                delete c;
+                        }
+
+                }, 10000, 0);
+
+        }
+
 }
 
 void Connection::SetBufferReader(std::unique_ptr<IZippyBufferReader> reader){
@@ -234,7 +323,9 @@ ILogger* Connection::GetLogger(){
         return this->logger.get();
 }
 
-Connection::Connection(Connection && other) noexcept : router(other.router), client_connection(other.client_connection), ip_address(other.ip_address), last_alive_time(other.last_alive_time), current_headers(other.current_headers), hasToWrite(other.hasToWrite), toClose(other.toClose), reader(std::move(other.reader)), writer(std::move(other.writer)), logger(other.logger), send_buffer(other.send_buffer) {
+Connection::Connection(Connection && other) noexcept : router(other.router), client_connection(other.client_connection), 
+ip_address(other.ip_address), current_headers(other.current_headers), toClose(other.toClose), 
+reader(std::move(other.reader)), writer(std::move(other.writer)), logger(other.logger), send_buffer(other.send_buffer) {
 
 }
 
@@ -245,14 +336,13 @@ Connection & Connection::operator=(Connection && other) noexcept{
                 router = other.router;
                 client_connection = other.client_connection;
                 ip_address = other.ip_address;
-                last_alive_time = other.last_alive_time;
                 current_headers = other.current_headers;
-                hasToWrite = other.hasToWrite;
                 toClose = other.toClose;
                 reader = std::move(other.reader);
                 writer = std::move(other.writer);
                 logger = other.logger;
                 send_buffer = other.send_buffer;
+                connection_timer = other.connection_timer;
         }
 
         return *this;
@@ -283,7 +373,7 @@ void Application::BindAndListen(int port){
                 uv_tcp_init(app->loop, client);
 
                 if(uv_accept(svr, (uv_stream_t*)client) == 0){
-                        app->logger->Log("New connection accepted");
+                        //app->logger->Log("New connection accepted");
                         Connection * c = new Connection{client, app->GetRouter(), app->logger};
                         client->data = (void*)c;
                         c->SetBufferReader(std::make_unique<SocketBufferReader>((uv_stream_t*)client));
