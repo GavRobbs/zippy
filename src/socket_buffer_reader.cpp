@@ -13,6 +13,8 @@
 #include "networking/socket_buffer_reader.h"
 #include "zippy_core.h"
 #include <optional>
+#include <string>
+#include <sstream>
 
 SocketBufferReader::SocketBufferReader(uv_stream_t * cs):client_socket{cs}, status{IZippyBufferReader::BUFFER_READER_STATUS::IDLE}{
 
@@ -45,6 +47,7 @@ void SocketBufferReader::ReadData(){
                 //Fetch the socket buffer reader object
                 auto conn =  static_cast<Connection*>(client->data);
                 auto sbr = dynamic_cast<SocketBufferReader*>(conn->GetBufferReader());
+                std::size_t body_start = 0;
 
                 if(sbr->status == IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE || sbr->status == IZippyBufferReader::BUFFER_READER_STATUS::INVALID){
                         //If complete, we exit
@@ -56,13 +59,15 @@ void SocketBufferReader::ReadData(){
                         //Read the data
                         conn->ResetTimer();
                         sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::READING;
-                        sbr->raw_body += std::string{buf->base};
+                        //I was using += here, but apparently it causes errors with
+                        //null characters which can happen when you're reading binary
+                        sbr->raw_body.append(buf->base, nread);
 
                         /* If we don't know for sure that we've finished the header, check to see if we have
                         and determine where the body starts.*/
                         if(!sbr->finishedHeader){
 
-                                std::size_t body_start = sbr->raw_body.find("\r\n\r\n");
+                                body_start = sbr->raw_body.find("\r\n\r\n");
                                 if(body_start != std::string::npos){
                                         sbr->finishedHeader = true;
                                         sbr->body_start_index = body_start + 4;
@@ -79,17 +84,16 @@ void SocketBufferReader::ReadData(){
                                         else if(sbr->raw_body.find("Content-Length:") != std::string::npos){
 
                                                 sbr->detectedContentLength = true;
-                                                std::size_t cl_index = sbr->raw_body.find("Content-Length:");
-                                                std::string size_str = "";
-                                                for(auto it = sbr->raw_body.begin() + cl_index + 16; it != sbr->raw_body.end(); ++it){
-                                                        
-                                                        if(*it == '\r'){
-                                                                break;
-                                                        }
 
-                                                        size_str += *it;
-                                                }
-                                                sbr->content_length = std::atol(size_str.data());
+                                                std::regex re("Content-Length:\\s*(\\d+)");
+                                                std::smatch match;
+
+                                                std::string header_chunk = sbr->raw_body.substr(0, body_start);
+
+                                                std::regex_search(header_chunk, match, re);
+                                                sbr->content_length = std::stol(match[1].str());
+                                                conn->GetLogger()->Log("Content length is " + match[1].str());
+
                                         }else if(sbr->raw_body.find("Connection: close") == std::string::npos){
                                                 //You can omit content length in get, head and options requests
                                                 //but otherwise, you have to have some indication of length
@@ -119,8 +123,11 @@ void SocketBufferReader::ReadData(){
 
                 if(sbr->finishedHeader){
                         if(sbr->detectedContentLength){
-                                if(sbr->raw_body.length() >= sbr->content_length){
+                                //conn->GetLogger()->Log(std::to_string(sbr->raw_body.length() - sbr->body_start_index));
+                                if((sbr->raw_body.length() - sbr->body_start_index) >= sbr->content_length){
                                         sbr->status = IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE;
+                                } else{
+                                        conn->ResetTimer();
                                 }
                         } else if(sbr->detectedChunks){
                                 if(sbr->raw_body.find("0\r\n\r\n") != std::string::npos){
@@ -131,7 +138,30 @@ void SocketBufferReader::ReadData(){
                         }
 
                         if(sbr->status == IZippyBufferReader::BUFFER_READER_STATUS::COMPLETE){
+                                //conn->GetLogger()->Log(sbr->raw_body);
                                 HTTPRequest request = conn->ParseHTTPRequest(sbr->raw_body);
+
+                                //Here I'm trying to extract the content type from the header
+                                std::string head = sbr->raw_body.substr(0, sbr->body_start_index);
+                                auto ct_location = head.find("Content-Type:");
+
+                                if(ct_location != std::string::npos){
+
+                                        std::stringstream ct_extractor{head.substr(ct_location + 14)};
+                                        std::string ctype = "";
+                                        std::getline(ct_extractor, ctype, '\r');
+
+                                        std::size_t mpfd_start = ctype.find("multipart/form-data;");
+
+                                        if(mpfd_start != std::string::npos){
+                                                request.header.content_type = "multipart/form-data";
+                                                request.header.boundary = ctype.substr(mpfd_start + 30);
+                                        } else{
+                                                request.header.content_type = ctype;
+                                        }
+
+                                }
+
                                 conn->ProcessRequest(request);
                                 sbr->Reset();    
                         }

@@ -15,7 +15,7 @@ pkg_check_modules(LIBUV REQUIRED libuv)
 
 include_directories(include/)
 
-add_library(${PROJECT_NAME} SHARED src/zippy_core.cpp src/zippy_routing.cpp src/zippy_utils.cpp src/socket_buffer_reader.cpp src/socket_buffer_writer.cpp src/zippy_exceptions.cpp src/extension_factory.cpp)
+add_library(${PROJECT_NAME} SHARED src/zippy_core.cpp src/zippy_routing.cpp src/zippy_utils.cpp src/socket_buffer_reader.cpp src/socket_buffer_writer.cpp src/zippy_exceptions.cpp src/extension_factory.cpp src/parsers/url_encoded_parser.cpp src/parsers/multipart_parser.cpp)
 target_link_libraries(${PROJECT_NAME} dl ${LIBUV_LIBRARIES})
 target_include_directories(${PROJECT_NAME} PRIVATE ${LIBUV_INCLUDE_DIRS})
 

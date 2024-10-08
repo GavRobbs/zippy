@@ -15,11 +15,26 @@ std::string webpage_body = R"(
         <p>Straight from the trenches! This is currently running on Ubuntu 22 on a Raspberry Pi 3b+ with fried GPIO pins.</p>
         <p>Click <a href="/poetry">here</a> to see some poetry. </p>
         <form action="/upload" method="POST" enctype="multipart/form-data">
-                <p>Upload an image here and maybe it will randomly appear with a poem.</p>
-                <input type="text" name="submitter">
-                <input type="file" name="fupload">
+                <p>Enter your information here</p>
+                <label for="yourName">Your Name</label><br />
+                <input type="text" name="name" id="yourName"><br/>
+                <label for="yourCountry">Your Country</label><br />
+                <input type="text" name="home_country" id="yourCountry">
+                <label for="yourPic">Your Picture</label><br />
+                <input type="file" name="photo" id="yourPic">
                 <input type="submit">
         </form>
+</body>
+</html>)";
+
+std::string form_submit_body = R"(<html>
+<head>
+        <title>A directly served webpage</title>
+</head>
+<body>
+        <h1>Thank you for submitting</h1>
+        <p>Your input has been considered!</p>
+        <p>Click <a href="/">here</a> to go home. </p>
 </body>
 </html>)";
 
@@ -89,10 +104,12 @@ int main(int argc, char **argv){
         app.GetRouter().AddRoute("/upload", [](HTTPRequest & request) -> std::string {
 
                 if(request.header.method == "POST"){
-                        std::cout << "The size of the uploaded file is: " << request.header.content_length << std::endl;
+                        std::cout << (std::string)request.POST["name"] << std::endl;
+                        std::cout << (std::string)request.POST["home_country"] << std::endl;
+
                         return ZippyUtils::BuildHTTPResponse(201, "OK", {
-                                { "Content-Type", "application/json" }
-                        }, json_response);
+                                { "Content-Type", "text/html" },
+                        }, form_submit_body);
                 } else{
                         return ZippyUtils::BuildHTTPResponse(404, "Not Found.", {}, "");
                 }

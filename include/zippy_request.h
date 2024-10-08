@@ -13,6 +13,7 @@ struct HTTPRequestHeader{
         std::string user_agent_info;
         std::string host;
         std::string content_type;
+        std::string boundary;
         size_t content_length;
         bool keep_alive;
 };

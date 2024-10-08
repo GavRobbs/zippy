@@ -7,7 +7,8 @@
 #include "exceptions/zippy_exceptions.h"
 
 struct ZippyFile{
-        std::string name;
+        std::string saved_name;
+        std::string original_fn;
         std::string server_path;
         std::string mime_type;
         std::size_t size;
@@ -108,6 +109,7 @@ class ZippyUtils{
     static std::string BuildHTTPResponse(int status, std::string text_info, std::map<std::string, std::string> headers, std::string body);
     static std::string URLDecode(const std::string & encoded_string);
     static std::string URLEncode(const std::string & decoded_string);
+    static std::string Trim(const std::string & str);
 };
 
 #endif

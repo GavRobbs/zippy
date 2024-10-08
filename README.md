@@ -34,11 +34,14 @@ When it's done.
 - 30/9/24: Fixed some memory leakage and the overall stability of the core connection code
 - 30/9/24: Added date and time to the loggers
 - 30/9/24: Removed the threads requirement from the CMakeLists.txt file
+- 8/10/24: Added an IZippyBodyParser interface and added a parsers to handle URL encoded data and multipart data. Updated the example accordingly.
+- 8/10/24: Fixed some errors with the buffer reader.
 
 ### Current Priorities
 
-- Convert most request headers to a key-value type that supports additional data
+- MIME type checking for multipart uploaded data
 - Add a file storage backend option
+- Convert most request headers to a key-value type that supports additional data
 - Add a templating engine
 - Integrate JSON and XML libraries
 - Add templated HTML, JSON, XML and file responses

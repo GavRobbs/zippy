@@ -1,6 +1,8 @@
 #include "zippy_utils.h"
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
 
 void Parameter::Add(std::string extra){
 
@@ -124,4 +126,20 @@ std::string ZippyUtils::URLEncode(const std::string & decoded_string){
     }
 
     return output.str();
+}
+
+std::string ZippyUtils::Trim(const std::string & str){
+
+    auto start = std::find_if_not(str.begin(), str.end(), [](unsigned char ch) {
+        return std::isspace(ch);
+    });
+
+    // Find the last non-whitespace character
+    auto end = std::find_if_not(str.rbegin(), str.rend(), [](unsigned char ch) {
+        return std::isspace(ch);
+    }).base();
+
+    // Return the substring between the first and last non-whitespace characters
+    return (start < end) ? std::string(start, end) : "";
+
 }

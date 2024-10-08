@@ -15,6 +15,9 @@
 #include "zippy_utils.h"
 #include "networking/socket_buffer_reader.h"
 #include "networking/socket_buffer_writer.h"
+#include "body_parsers/url_encoded_parser.h"
+#include "body_parsers/multipart_parser.h"
+
 
 Connection::Connection(uv_tcp_t * conn, Router & r, std::shared_ptr<ILogger> logger):client_connection(conn), router(r), logger(logger){
 }
@@ -77,6 +80,25 @@ void Connection::ReadData(){
 void Connection::ProcessRequest(HTTPRequest & request){
 
         RouteFunction func;
+        int return_value = 200;
+
+        //Handle form encoding, in the future, will add a dispatcher so this code isn't here
+        if(request.header.content_type == "application/x-www-form-urlencoded"){
+
+                URLEncodedParser p;
+                return_value = p.Parse(request.body, request.header, request.header.method == "GET" ? request.GET : request.POST, request.FILES);
+
+        } else if(request.header.content_type == "multipart/form-data"){
+                MultipartParser p;
+                return_value = p.Parse(request.body, request.header, request.header.method == "GET" ? request.GET : request.POST, request.FILES);
+        }
+
+        if(return_value != 200){
+                std::string data = ZippyUtils::BuildHTTPResponse(return_value, "", {}, "");
+                logger->Log(std::string{return_value});
+                SendData(data);
+                return;
+        }
 
         if(router.FindRoute(request.header.path, func, request.URL_PARAMS)){
                 SendData(func(request));
