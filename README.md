@@ -36,6 +36,7 @@ When it's done.
 - 30/9/24: Removed the threads requirement from the CMakeLists.txt file
 - 8/10/24: Added an IZippyBodyParser interface and added a parsers to handle URL encoded data and multipart data. Updated the example accordingly.
 - 8/10/24: Fixed some errors with the buffer reader.
+- 11/4/24: Started writing my notes. Wrote some of the information I got about HTTP.
 
 ### Current Priorities
 
